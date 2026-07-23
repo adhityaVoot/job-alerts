@@ -82,8 +82,8 @@
     {"name": "Musical AI", "ats": "none", "slug": ""},
     {"name": "Kits AI", "ats": "none", "slug": ""},
     {"name": "Voice-Swap", "ats": "none", "slug": ""},
-    {"name": "Sony AI", "ats": "none", "slug": ""},
-    {"name": "Universal Music Group", "ats": "none", "slug": ""},
+    {"name": "Sony AI", "ats": "none", "slug": "", "aliases": ["Sony", "Sony Music"]},
+    {"name": "Universal Music Group", "ats": "none", "slug": "", "aliases": ["UMG"]},
     {"name": "Endel", "ats": "none", "slug": ""},
     {"name": "Beatoven.ai", "ats": "none", "slug": ""},
 
@@ -115,19 +115,24 @@
     {"name": "Sonde Health", "ats": "none", "slug": ""},
 
     {"name": "Amazon", "ats": "amazon", "slug": "",
+     "aliases": ["Amazon Web Services", "AWS", "Amazon (AWS)"],
      "queries": ["software development engineer intern",
                  "machine learning engineer intern",
                  "software development engineer new grad"]},
     {"name": "NVIDIA", "ats": "workday", "slug": "",
+     "aliases": ["Nvidia"],
      "tenant": "nvidia", "site": "NVIDIAExternalCareerSite", "dc": "wd5",
      "queries": ["intern", "new college graduate"], "max": 100},
     {"name": "Adobe", "ats": "workday", "slug": "",
      "tenant": "adobe", "site": "external_experienced", "dc": "wd5",
      "queries": ["intern", "university graduate"], "max": 60},
-    {"name": "Google DeepMind", "ats": "none", "slug": ""},
-    {"name": "Apple", "ats": "none", "slug": ""},
-    {"name": "Meta AI", "ats": "none", "slug": ""},
-    {"name": "Microsoft", "ats": "none", "slug": ""},
+    {"name": "Google DeepMind", "ats": "none", "slug": "",
+     "aliases": ["Google", "DeepMind", "Google DeepMind", "Alphabet"]},
+    {"name": "Apple", "ats": "none", "slug": "", "aliases": ["Apple Inc"]},
+    {"name": "Meta AI", "ats": "none", "slug": "",
+     "aliases": ["Meta", "Facebook", "Meta Platforms"]},
+    {"name": "Microsoft", "ats": "none", "slug": "",
+     "aliases": ["Microsoft Corporation"]},
 
     {"name": "Descript", "ats": "greenhouse", "slug": "descript"},
     {"name": "Twelve Labs", "ats": "ashby", "slug": "twelve-labs"},
@@ -140,7 +145,8 @@
     "match_target_companies_only": true,
     "listings": [
       "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/.github/scripts/listings.json",
-      "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json"
+      "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json",
+      "https://raw.githubusercontent.com/vanshb03/Summer2026-Internships/main/.github/scripts/listings.json"
     ]
   }
 }

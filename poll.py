@@ -163,26 +163,37 @@ ADAPTERS = {
 }
 
 
-def fetch_simplify(cfg, target_names):
-    """Pull SimplifyJobs listings.json feeds, keep only target companies."""
+def build_alias_map(companies):
+    """Map every alias (and canonical name), lowercased, to the canonical name.
+    Lets an aggregator's 'Google' resolve to our 'Google DeepMind'."""
+    amap = {}
+    for c in companies:
+        amap[c["name"].lower()] = c["name"]
+        for a in c.get("aliases", []):
+            amap[a.lower()] = c["name"]
+    return amap
+
+
+def fetch_simplify(cfg, alias_map):
+    """Pull every aggregator listings.json feed, keep only target companies
+    (matched through the alias map), de-duped across feeds."""
     out = []
-    names_lc = {n.lower() for n in target_names}
     for url in cfg.get("listings", []):
         try:
             data = http_json(url)
         except Exception as e:
-            print(f"  simplify feed failed: {url} -> {e}", file=sys.stderr)
+            print(f"  aggregator feed failed: {url} -> {e}", file=sys.stderr)
             continue
         for j in data:
             if not (j.get("active", True) and j.get("is_visible", True)):
                 continue
-            company = j.get("company_name", "")
-            if cfg.get("match_target_companies_only", True):
-                if company.lower() not in names_lc:
-                    continue
+            raw_name = j.get("company_name", "")
+            canonical = alias_map.get(raw_name.lower())
+            if cfg.get("match_target_companies_only", True) and not canonical:
+                continue
             out.append({
                 "id": f"simplify:{j.get('id') or j.get('url')}",
-                "company": company,
+                "company": canonical or raw_name,
                 "title": j.get("title", ""),
                 "url": j.get("url", ""),
                 "location": ", ".join(j.get("locations", []) or []),
@@ -253,7 +264,7 @@ def gather(cfg, verify=False):
     """Fetch every source, return (all_matching_postings, per_source_report)."""
     level_re = compile_kw(cfg["filters"]["level_keywords"])
     role_re = compile_kw(cfg["filters"]["role_keywords"])
-    target_names = [c["name"] for c in cfg["companies"]]
+    alias_map = build_alias_map(cfg["companies"])
     postings = []
     report = []
 
@@ -280,7 +291,7 @@ def gather(cfg, verify=False):
         time.sleep(0.2)
 
     if cfg.get("simplify", {}).get("enabled"):
-        sraw = fetch_simplify(cfg["simplify"], target_names)
+        sraw = fetch_simplify(cfg["simplify"], alias_map)
         shits = [p for p in sraw if matches(p["title"], level_re, role_re)]
         postings.extend(shits)
         report.append(("SimplifyJobs", "simplify", "ok", len(sraw), len(shits)))
@@ -363,6 +374,23 @@ def write_report(cfg, postings, report):
 def main():
     verify = "--verify" in sys.argv
     do_report = "--report" in sys.argv
+    test_notify = "--test-notify" in sys.argv
+    simulate = "--simulate-drop" in sys.argv
+
+    topic = os.environ.get("NTFY_TOPIC")
+
+    if test_notify:
+        # Prove the phone path end to end, from the real script, right now.
+        if not topic:
+            print("NTFY_TOPIC not set.", file=sys.stderr)
+            sys.exit(1)
+        ntfy(topic, "job-alerts self test",
+             "If this buzzed your phone, notifications work. "
+             "This is a manual test, not a real posting.",
+             "https://github.com/")
+        print("Sent a test notification to your phone.")
+        return
+
     with open(SOURCES_PATH) as f:
         cfg = json.load(f)
 
@@ -370,6 +398,23 @@ def main():
 
     if do_report:
         write_report(cfg, postings, report)
+        return
+
+    if simulate:
+        # Prove the full detect->filter->notify chain on a REAL open role:
+        # pretend the first matched posting is brand new. Does NOT write state.
+        if not topic:
+            print("NTFY_TOPIC not set.", file=sys.stderr)
+            sys.exit(1)
+        if not postings:
+            print("No matching roles open to simulate with.")
+            return
+        p = postings[0]
+        loc = f"\n{p['location']}" if p["location"] else ""
+        ntfy(topic, f"[SIM] {p['company']}: {p['title']}",
+             f"Simulated new posting{loc}\n{p['url']}", p["url"])
+        print(f"Simulated a drop for a real open role:\n  {p['company']}: {p['title']}")
+        print("State was NOT modified. This is exactly what a real new posting sends.")
         return
 
     if verify:
