@@ -1,5 +1,7 @@
 {
   "filters": {
+    "us_only": true,
+    "exclude_phd": true,
     "level_keywords": [
       "intern", "internship", "co-op", "coop",
       "new grad", "new graduate", "newgrad",

@@ -197,6 +197,7 @@ def fetch_simplify(cfg, alias_map):
                 "title": j.get("title", ""),
                 "url": j.get("url", ""),
                 "location": ", ".join(j.get("locations", []) or []),
+                "degrees": j.get("degrees", []) or [],
             })
     return out
 
@@ -214,6 +215,79 @@ def compile_kw(keywords):
 def matches(title, level_re, role_re):
     t = title.lower()
     return bool(level_re.search(t)) and bool(role_re.search(t))
+
+
+# --- PhD exclusion --------------------------------------------------------
+
+PHD_TITLE_RE = re.compile(r"\bph\.?\s?d\b|\bdoctoral\b|\bdoctorate\b")
+
+
+def is_phd_only(title, degrees):
+    """True if the role is PhD-gated. Uses the title always, and the
+    aggregator 'degrees' list when present (a role open to Bachelor's or
+    Master's as well is NOT treated as PhD-only)."""
+    if PHD_TITLE_RE.search(title.lower()):
+        return True
+    if degrees:
+        degs = [d.lower() for d in degrees]
+        has_lower = any("bachelor" in d or "master" in d or "undergrad" in d
+                        for d in degs)
+        has_phd = any("phd" in d or "ph.d" in d or "doctor" in d for d in degs)
+        if has_phd and not has_lower:
+            return True
+    return False
+
+
+# --- US location gate -----------------------------------------------------
+
+US_CODES = ("al ak az ar ca co ct de fl ga hi id il in ia ks ky la me md ma "
+            "mi mn ms mo mt ne nv nh nj nm ny nc nd oh ok or pa ri sc sd tn "
+            "tx ut vt va wa wv wi wy dc").split()
+# state code only when it stands alone at start or right after a comma:
+# "Santa Clara, CA" matches; "Canada" / "India" do not.
+US_CODE_RE = re.compile(r"(?:^|,\s*)(" + "|".join(US_CODES) + r")\b", re.I)
+US_MARKERS = ("united states", "usa", "u.s.", "u.s.a", "us-", ", us", "(us",
+              "remote, us", "us remote")
+# Non-US countries and major hubs, matched as whole words/phrases so that
+# "India" does not match "Indiana" and "New Zealand" does not match "New York".
+NON_US_TERMS = [
+    "canada", "toronto", "vancouver", "montreal", "ottawa", "waterloo", "calgary",
+    "united kingdom", "uk", "u.k.", "england", "scotland", "wales", "britain",
+    "london", "manchester", "edinburgh", "glasgow", "bristol",
+    "ireland", "dublin", "germany", "berlin", "munich", "hamburg", "france",
+    "paris", "netherlands", "amsterdam", "spain", "madrid", "barcelona",
+    "switzerland", "zurich", "geneva", "sweden", "stockholm", "poland", "warsaw",
+    "krakow", "wroclaw", "denmark", "copenhagen", "norway", "oslo", "finland",
+    "helsinki", "portugal", "lisbon", "italy", "milan", "rome", "austria",
+    "vienna", "belgium", "brussels", "czech", "prague", "romania", "bucharest",
+    "greece", "athens", "india", "bangalore", "bengaluru", "hyderabad", "mumbai",
+    "delhi", "gurgaon", "gurugram", "pune", "chennai", "noida", "kolkata",
+    "ahmedabad", "china", "beijing", "shanghai", "shenzhen", "hangzhou",
+    "guangzhou", "japan", "tokyo", "osaka", "korea", "seoul", "singapore",
+    "taiwan", "taipei", "hong kong", "macau", "australia", "sydney", "melbourne",
+    "brisbane", "perth", "new zealand", "auckland", "israel", "tel aviv", "haifa",
+    "brazil", "sao paulo", "mexico", "guadalajara", "uae", "dubai", "abu dhabi",
+    "philippines", "manila", "vietnam", "hanoi", "indonesia", "jakarta",
+    "thailand", "bangkok", "malaysia", "kuala lumpur", "turkey", "istanbul",
+    "argentina", "colombia", "bogota", "chile", "santiago", "egypt", "cairo",
+    "nigeria", "lagos", "kenya", "nairobi", "south africa",
+]
+NON_US_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(t) for t in NON_US_TERMS) + r")\b")
+
+
+def is_us(location):
+    """True if the location looks US, False if clearly non-US, and True for
+    unknown/ambiguous (empty or plain 'Remote') so US roles are never dropped
+    just for being vague."""
+    if not location:
+        return True
+    l = location.lower()
+    if US_CODE_RE.search(location) or any(m in l for m in US_MARKERS):
+        return True
+    if NON_US_RE.search(l):
+        return False
+    return True  # ambiguous (e.g. bare "Remote") -> keep
 
 
 # --------------------------------------------------------------------------
@@ -262,9 +336,22 @@ def save_seen(seen):
 
 def gather(cfg, verify=False):
     """Fetch every source, return (all_matching_postings, per_source_report)."""
-    level_re = compile_kw(cfg["filters"]["level_keywords"])
-    role_re = compile_kw(cfg["filters"]["role_keywords"])
+    filt = cfg["filters"]
+    level_re = compile_kw(filt["level_keywords"])
+    role_re = compile_kw(filt["role_keywords"])
+    exclude_phd = filt.get("exclude_phd", False)
+    us_only = filt.get("us_only", False)
     alias_map = build_alias_map(cfg["companies"])
+
+    def keep(p):
+        if not matches(p["title"], level_re, role_re):
+            return False
+        if exclude_phd and is_phd_only(p["title"], p.get("degrees", [])):
+            return False
+        if us_only and not is_us(p.get("location", "")):
+            return False
+        return True
+
     postings = []
     report = []
 
@@ -285,14 +372,14 @@ def gather(cfg, verify=False):
         except Exception as e:
             report.append((co["name"], co["ats"], f"ERR {e}", 0, 0))
             continue
-        hits = [p for p in raw if matches(p["title"], level_re, role_re)]
+        hits = [p for p in raw if keep(p)]
         postings.extend(hits)
         report.append((co["name"], co["ats"], "ok", len(raw), len(hits)))
         time.sleep(0.2)
 
     if cfg.get("simplify", {}).get("enabled"):
         sraw = fetch_simplify(cfg["simplify"], alias_map)
-        shits = [p for p in sraw if matches(p["title"], level_re, role_re)]
+        shits = [p for p in sraw if keep(p)]
         postings.extend(shits)
         report.append(("SimplifyJobs", "simplify", "ok", len(sraw), len(shits)))
 
@@ -339,7 +426,14 @@ def write_report(cfg, postings, report):
     L.append(f"- **{len(postings)} matching roles open right now**\n")
 
     L.append("\n## Filter\n")
-    L.append("A title must match a **level** keyword AND a **role** keyword.\n\n")
+    L.append("A title must match a **level** keyword AND a **role** keyword.\n")
+    if cfg["filters"].get("us_only"):
+        L.append("- **US-only:** roles clearly located outside the US are dropped "
+                 "(ambiguous/remote kept).\n")
+    if cfg["filters"].get("exclude_phd"):
+        L.append("- **No PhD-only:** roles gated to PhD (by title or the "
+                 "aggregator degrees field) are dropped.\n")
+    L.append("\n")
     L.append("**Level:** " + ", ".join(f"`{k}`" for k in cfg["filters"]["level_keywords"]) + "\n\n")
     L.append("**Role:** " + ", ".join(f"`{k}`" for k in cfg["filters"]["role_keywords"]) + "\n")
 
