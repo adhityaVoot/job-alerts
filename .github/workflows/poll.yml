@@ -1,0 +1,43 @@
+name: job-alerts
+
+on:
+  schedule:
+    # every 30 minutes
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+# never let two runs race on seen.json
+concurrency:
+  group: job-alerts
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Poll job feeds and notify
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python poll.py
+
+      - name: Persist seen state
+        run: |
+          git config user.name  "job-alerts-bot"
+          git config user.email "job-alerts-bot@users.noreply.github.com"
+          git add seen.json
+          if git diff --staged --quiet; then
+            echo "no state change"
+          else
+            git commit -m "chore: update seen state [skip ci]"
+            # tolerate a racing push from a concurrent run
+            git pull --rebase --autostash || true
+            git push
+          fi

@@ -1,0 +1,47 @@
+{
+  "filters": {
+    "level_keywords": [
+      "intern", "internship", "co-op", "coop",
+      "new grad", "new graduate", "newgrad",
+      "early career", "early-career",
+      "university graduate", "university grad", "campus",
+      "entry level", "entry-level",
+      "graduate program", "2026"
+    ],
+    "role_keywords": [
+      "software engineer", "software engineering", "swe",
+      "machine learning", "ml engineer", "ml scientist",
+      "ai engineer", "applied ai", "applied scientist",
+      "research engineer", "research scientist",
+      "deep learning", "backend engineer", "full stack",
+      "full-stack", "member of technical staff", "mts"
+    ]
+  },
+  "companies": [
+    {"name": "Anthropic",   "ats": "greenhouse", "slug": "anthropic"},
+    {"name": "Deepgram",    "ats": "ashby",      "slug": "deepgram"},
+    {"name": "Together AI", "ats": "greenhouse", "slug": "togetherai"},
+    {"name": "Baseten",     "ats": "ashby",      "slug": "baseten"},
+    {"name": "ElevenLabs",  "ats": "ashby",      "slug": "elevenlabs"},
+    {"name": "Cartesia",    "ats": "ashby",      "slug": "cartesia"},
+    {"name": "Hume AI",     "ats": "greenhouse", "slug": "humeai"},
+    {"name": "Sesame AI",   "ats": "ashby",      "slug": "sesame"},
+    {"name": "Perplexity",  "ats": "ashby",      "slug": "perplexity"},
+    {"name": "Modal",       "ats": "ashby",      "slug": "modal"},
+    {"name": "LiveKit",     "ats": "ashby",      "slug": "livekit"},
+    {"name": "Vapi",        "ats": "ashby",      "slug": "vapi"},
+    {"name": "Fireworks AI","ats": "ashby",      "slug": "fireworksai"},
+    {"name": "Suno",        "ats": "ashby",      "slug": "suno"},
+    {"name": "Udio",        "ats": "greenhouse", "slug": "udio"},
+    {"name": "AssemblyAI",  "ats": "greenhouse", "slug": "assemblyai"},
+    {"name": "Retell AI",   "ats": "none",       "slug": ""}
+  ],
+  "simplify": {
+    "enabled": true,
+    "match_target_companies_only": true,
+    "listings": [
+      "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/.github/scripts/listings.json",
+      "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json"
+    ]
+  }
+}
