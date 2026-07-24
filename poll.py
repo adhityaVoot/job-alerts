@@ -24,6 +24,7 @@ import time
 import urllib.request
 import urllib.error
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SOURCES_PATH = os.path.join(HERE, "sources.json")
@@ -99,6 +100,83 @@ def adapter_ashby(co):
     return out
 
 
+def adapter_smartrecruiters(co):
+    """SmartRecruiters public postings API (ServiceNow, Canva, Visa, Glean...).
+    Paginates 100 at a time; capped so a 5000-role board can't stall the run."""
+    slug = co["slug"]
+    out, offset = [], 0
+    while offset < co.get("max", 400):
+        url = ("https://api.smartrecruiters.com/v1/companies/"
+               f"{slug}/postings?limit=100&offset={offset}")
+        data = http_json(url)
+        content = data.get("content", [])
+        if not content:
+            break
+        for j in content:
+            ident = (j.get("company") or {}).get("identifier", slug)
+            loc = j.get("location") or {}
+            out.append({
+                "id": f"smartrecruiters:{slug}:{j.get('id')}",
+                "company": co["name"],
+                "title": j.get("name", ""),
+                "url": f"https://jobs.smartrecruiters.com/{ident}/{j.get('id')}",
+                "location": loc.get("fullLocation") or ", ".join(
+                    x for x in (loc.get("city"), loc.get("region")) if x),
+            })
+        offset += 100
+        if offset >= data.get("totalFound", 0):
+            break
+    return out
+
+
+def adapter_rippling(co):
+    """Rippling's own ATS board API (Rippling, Opendoor, and a growing number
+    of startups that moved off Greenhouse)."""
+    slug = co["slug"]
+    data = http_json(
+        f"https://api.rippling.com/platform/api/ats/v1/board/{slug}/jobs")
+    out = []
+    for j in data if isinstance(data, list) else []:
+        out.append({
+            "id": f"rippling:{slug}:{j.get('uuid')}",
+            "company": co["name"],
+            "title": j.get("name", ""),
+            "url": j.get("url", ""),
+            "location": (j.get("workLocation") or {}).get("label", ""),
+        })
+    return out
+
+
+def adapter_eightfold(co):
+    """Eightfold-hosted career sites (Netflix, and many Fortune 500s). Like
+    Amazon, the board is huge, so query narrow terms instead of pulling it all."""
+    host, domain = co["host"], co["domain"]
+    out = []
+    for q in co.get("queries", ["intern"]):
+        start = 0
+        while start < co.get("max", 100):
+            url = (f"https://{host}/api/apply/v2/jobs?domain={domain}"
+                   f"&start={start}&num=50&query={urllib.parse.quote(q)}")
+            try:
+                data = http_json(url)
+            except Exception:
+                break
+            positions = data.get("positions", [])
+            if not positions:
+                break
+            for j in positions:
+                out.append({
+                    "id": f"eightfold:{domain}:{j.get('id')}",
+                    "company": co["name"],
+                    "title": j.get("name", ""),
+                    "url": j.get("canonicalPositionUrl",
+                                 f"https://{host}/careers/job/{j.get('id')}"),
+                    "location": j.get("location", ""),
+                })
+            start += 50
+    return out
+
+
 def adapter_amazon(co):
     """amazon.jobs search.json. Amazon posts thousands of roles, so we query
     narrow terms rather than pulling the whole board."""
@@ -158,6 +236,9 @@ ADAPTERS = {
     "greenhouse": adapter_greenhouse,
     "lever": adapter_lever,
     "ashby": adapter_ashby,
+    "smartrecruiters": adapter_smartrecruiters,
+    "rippling": adapter_rippling,
+    "eightfold": adapter_eightfold,
     "amazon": adapter_amazon,
     "workday": adapter_workday,
 }
@@ -271,21 +352,37 @@ NON_US_TERMS = [
     "thailand", "bangkok", "malaysia", "kuala lumpur", "turkey", "istanbul",
     "argentina", "colombia", "bogota", "chile", "santiago", "egypt", "cairo",
     "nigeria", "lagos", "kenya", "nairobi", "south africa",
+    # smaller hubs that showed up once the company list widened
+    "iceland", "reykjavik", "lithuania", "vilnius", "estonia", "tallinn",
+    "latvia", "riga", "ukraine", "kyiv", "serbia", "belgrade", "croatia",
+    "zagreb", "hungary", "budapest", "bulgaria", "sofia", "slovakia",
+    "bratislava", "slovenia", "ljubljana", "luxembourg", "cyprus", "malta",
+    "pakistan", "lahore", "karachi", "islamabad", "bangladesh", "dhaka",
+    "sri lanka", "colombo", "saudi arabia", "riyadh", "qatar", "doha",
+    "kuwait", "bahrain", "beirut", "armenia", "yerevan", "uruguay",
+    "montevideo", "peru", "lima", "costa rica", "morocco", "casablanca",
+    "tunisia", "ghana", "accra", "emea", "apac", "latam",
 ]
 NON_US_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(t) for t in NON_US_TERMS) + r")\b")
 
 
-def is_us(location):
+def is_us(location, title=""):
     """True if the location looks US, False if clearly non-US, and True for
     unknown/ambiguous (empty or plain 'Remote') so US roles are never dropped
-    just for being vague."""
-    if not location:
+    just for being vague.
+
+    The title is a fallback, not an override: plenty of feeds leave location
+    vague but say "... Intern - Berlin" right in the title. A location that
+    affirmatively looks US still wins, so "SDE Intern, London team" based in
+    Seattle is kept."""
+    l = (location or "").lower()
+    if location and (US_CODE_RE.search(location)
+                     or any(m in l for m in US_MARKERS)):
         return True
-    l = location.lower()
-    if US_CODE_RE.search(location) or any(m in l for m in US_MARKERS):
-        return True
-    if NON_US_RE.search(l):
+    if l and NON_US_RE.search(l):
+        return False
+    if title and NON_US_RE.search(title.lower()):
         return False
     return True  # ambiguous (e.g. bare "Remote") -> keep
 
@@ -348,34 +445,38 @@ def gather(cfg, verify=False):
             return False
         if exclude_phd and is_phd_only(p["title"], p.get("degrees", [])):
             return False
-        if us_only and not is_us(p.get("location", "")):
+        if us_only and not is_us(p.get("location", ""), p["title"]):
             return False
         return True
+
+    def fetch(co):
+        """(report row, matching postings) for one company. Never raises: a
+        company whose board 404s must not take the whole run down."""
+        if co["ats"] in ("none", "simplify"):
+            # No ATS feed; the name still feeds the Simplify matcher below.
+            return (co["name"], co["ats"], "simplify-only", 0, 0), []
+        adapter = ADAPTERS.get(co["ats"])
+        if not adapter:
+            return (co["name"], co["ats"], "NO ADAPTER", 0, 0), []
+        try:
+            raw = adapter(co)
+        except urllib.error.HTTPError as e:
+            return (co["name"], co["ats"], f"HTTP {e.code}", 0, 0), []
+        except Exception as e:
+            return (co["name"], co["ats"], f"ERR {e}", 0, 0), []
+        hits = [p for p in raw if keep(p)]
+        return (co["name"], co["ats"], "ok", len(raw), len(hits)), hits
 
     postings = []
     report = []
 
-    for co in cfg["companies"]:
-        if co["ats"] in ("none", "simplify"):
-            # No ATS feed; the name still feeds the Simplify matcher below.
-            report.append((co["name"], co["ats"], "simplify-only", 0, 0))
-            continue
-        adapter = ADAPTERS.get(co["ats"])
-        if not adapter:
-            report.append((co["name"], co["ats"], "NO ADAPTER", 0, 0))
-            continue
-        try:
-            raw = adapter(co)
-        except urllib.error.HTTPError as e:
-            report.append((co["name"], co["ats"], f"HTTP {e.code}", 0, 0))
-            continue
-        except Exception as e:
-            report.append((co["name"], co["ats"], f"ERR {e}", 0, 0))
-            continue
-        hits = [p for p in raw if keep(p)]
-        postings.extend(hits)
-        report.append((co["name"], co["ats"], "ok", len(raw), len(hits)))
-        time.sleep(0.2)
+    # Feeds are independent and IO-bound, so fetch them concurrently: run time
+    # tracks the slowest board, not the sum of 200 of them. ThreadPoolExecutor
+    # preserves input order, so the report stays stable run to run.
+    with ThreadPoolExecutor(max_workers=cfg.get("max_workers", 12)) as ex:
+        for row, hits in ex.map(fetch, cfg["companies"]):
+            report.append(row)
+            postings.extend(hits)
 
     if cfg.get("simplify", {}).get("enabled"):
         sraw = fetch_simplify(cfg["simplify"], alias_map)
@@ -387,23 +488,54 @@ def gather(cfg, verify=False):
     seen_ids = {}
     for p in postings:
         seen_ids[p["id"]] = p
-    return list(seen_ids.values()), report
+    return collapse(list(seen_ids.values())), report
+
+
+def collapse(postings):
+    """One posting per (company, title). A role that a company lists on its own
+    board AND that an aggregator picked up arrives here twice under different
+    ids, and multi-city roles arrive once per city; either way it is one job and
+    deserves one ping.
+
+    The survivor keeps every id in its group under 'ids', so state stays keyed
+    on all of them: if the winning source drops the role tomorrow while another
+    still carries it, that leftover id is already marked seen and can't
+    re-notify."""
+    groups = {}
+    for p in postings:
+        key = (p["company"].strip().lower(), p["title"].strip().lower())
+        groups.setdefault(key, []).append(p)
+
+    out = []
+    for members in groups.values():
+        # A company's own ATS is the better link (aggregators go stale and
+        # sometimes point at a search page), so it wins the group.
+        winner = next((m for m in members
+                       if not m["id"].startswith("simplify:")), members[0])
+        winner = dict(winner)
+        winner["ids"] = sorted({m["id"] for m in members})
+        out.append(winner)
+    return out
 
 
 ENDPOINTS = {
     "greenhouse": "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
     "lever": "https://api.lever.co/v0/postings/{slug}?mode=json",
     "ashby": "https://api.ashbyhq.com/posting-api/job-board/{slug}",
+    "smartrecruiters": "https://api.smartrecruiters.com/v1/companies/{slug}/postings",
+    "rippling": "https://api.rippling.com/platform/api/ats/v1/board/{slug}/jobs",
+    "eightfold": "https://{host}/api/apply/v2/jobs?domain={domain}",
     "amazon": "https://www.amazon.jobs/en/search.json",
     "workday": "https://{tenant}.{dc}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs",
-    "none": "(no public feed - covered by SimplifyJobs)",
+    "none": "(no public feed - covered by the aggregator feeds)",
 }
 
 
 def endpoint_for(co):
     tpl = ENDPOINTS.get(co["ats"], "?")
     return tpl.format(slug=co.get("slug", ""), tenant=co.get("tenant", ""),
-                      dc=co.get("dc", ""), site=co.get("site", ""))
+                      dc=co.get("dc", ""), site=co.get("site", ""),
+                      host=co.get("host", ""), domain=co.get("domain", ""))
 
 
 def write_report(cfg, postings, report):
@@ -422,8 +554,10 @@ def write_report(cfg, postings, report):
     L.append("Auto-generated by `python3 poll.py --report`. Do not hand-edit.\n")
     L.append(f"- **{len(cfg['companies'])} companies** watched\n")
     L.append(f"- **{len(live)}** with a direct company feed, "
-             f"**{len(simp)}** covered via SimplifyJobs only\n")
-    L.append(f"- **{len(postings)} matching roles open right now**\n")
+             f"**{len(simp)}** covered via the aggregator feeds only\n")
+    L.append(f"- **{len(postings)} matching roles open right now** "
+             f"(one row per role: the same job seen on a company board and on "
+             f"an aggregator is collapsed)\n")
 
     L.append("\n## Filter\n")
     L.append("A title must match a **level** keyword AND a **role** keyword.\n")
@@ -444,9 +578,10 @@ def write_report(cfg, postings, report):
         r = stat.get(c["name"], (None, None, "?", 0, 0))
         L.append(f"| {c['name']} | {c['ats']} | `{endpoint_for(c)}` | {r[3]} | {r[4]} |\n")
 
-    L.append("\n## Covered by SimplifyJobs only\n")
-    L.append("No public ATS feed found. Their listings still get caught via the "
-             "SimplifyJobs feeds, filtered to these names.\n\n")
+    L.append("\n## Covered by the aggregator feeds only\n")
+    L.append("No public ATS feed found (or the company runs a bespoke careers "
+             "API). Their listings still get caught via the aggregator feeds "
+             "below, matched on these names and their aliases.\n\n")
     L.append(", ".join(c["name"] for c in simp) + "\n")
 
     L.append("\n## Aggregator feeds\n")
@@ -525,7 +660,7 @@ def main():
         sys.exit(1)
 
     seen = load_seen()
-    current_ids = {p["id"] for p in postings}
+    current_ids = {i for p in postings for i in p.get("ids", [p["id"]])}
 
     if seen is None:
         # First run: seed silently, one summary ping instead of a flood.
@@ -537,12 +672,30 @@ def main():
         print(f"Seeded {len(current_ids)} postings, no per-role notifications.")
         return
 
-    new = [p for p in postings if p["id"] not in seen]
-    for p in new:
+    # New only if NO id in the group was seen: a role that merely gained a
+    # second source is not a new job.
+    new = [p for p in postings
+           if not any(i in seen for i in p.get("ids", [p["id"]]))]
+
+    # Watching 400+ companies, a single run can surface a whole career-fair
+    # batch. Ping the first few individually, then one digest, so a burst
+    # stays readable on a lock screen instead of burying the good ones.
+    max_pings = cfg.get("max_pings", 10)
+    for p in new[:max_pings]:
         title = f"{p['company']}: {p['title']}"
         loc = f"\n{p['location']}" if p["location"] else ""
         ntfy(topic, title, f"New posting{loc}\n{p['url']}", p["url"])
         print(f"NOTIFY {title}")
+
+    rest = new[max_pings:]
+    if rest:
+        from collections import Counter
+        tally = Counter(p["company"] for p in rest)
+        summary = ", ".join(f"{c} ({n})" if n > 1 else c
+                            for c, n in tally.most_common(20))
+        ntfy(topic, f"+{len(rest)} more new roles",
+             f"Also just posted at: {summary}\nFull list in TRACKING.md.", "")
+        print(f"DIGEST {len(rest)} more across {len(tally)} companies")
 
     seen |= current_ids
     save_seen(seen)
