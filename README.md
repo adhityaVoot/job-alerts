@@ -23,11 +23,10 @@ every 30 min (GitHub Actions cron)
       │                   listings.json (broad safety net, filtered to my
       │                   target companies through their name aliases)
       │
-      ├─ filter ────────► title must match a LEVEL keyword (intern, new grad,
-      │                   entry level, …) AND a ROLE keyword (software
-      │                   engineer, machine learning, research engineer, …)
-      │                   using word boundaries, so "Internal Platform" is
-      │                   NOT treated as an internship
+      ├─ filter ────────► title must match a ROLE keyword (software engineer,
+      │                   machine learning, research engineer, …) AND read as
+      │                   entry-level, using word boundaries so "Internal
+      │                   Platform" is NOT treated as an internship
       │
       ├─ collapse ──────► one row per (company, title): a role listed on the
       │                   company's own board AND picked up by an aggregator
@@ -122,6 +121,34 @@ Many Fortune 500s are on Workday or Eightfold, which already have generic
 adapters — you only need the tenant/site/dc (Workday) or host/domain
 (Eightfold) from the careers-page URL, no new code.
 
+## What counts as entry-level
+
+Internships announce themselves in the title. New-grad roles frequently do not
+— a third of the new-grad roles at target companies are titled plainly
+"Software Engineer" or "Software Engineer I". So the level test is a
+precedence chain, checked in order:
+
+1. **An explicit level word wins outright** — `intern`, `new grad`,
+   `early career`, `campus`, `graduate`, … Google really does post "Software
+   Engineer II, Early Career" and Amazon "Applied Scientist 2 Intern"; a role
+   that calls itself entry-level is one.
+2. **Otherwise seniority vetoes** — `senior`, `staff`, `principal`, `manager`,
+   … so Rocket Lab's "Senior Ground Software Engineer I" can't sneak in on the
+   suffix. ("lead" is anchored to `tech lead`/`lead engineer`, because "Lead
+   Ads" is a TikTok product, not a job level.)
+3. **"Engineer I" / "Developer 1" counts on its own** — the most common
+   new-grad title containing no new-grad word. Level II and up do not.
+4. **A level-curated feed vouches for the rest.** The aggregator repos list
+   nothing but new-grad and internship roles, so membership *is* the level
+   signal (`"level_implied": true`). Without this the filter throws away ~470
+   genuine new-grad roles whose titles simply don't say "new grad".
+
+A separate veto drops roles that talk about engineering without being
+engineering — "Campus Recruiter, Machine Learning" clears both keyword gates
+otherwise.
+
+Set `"level_implied": false` if you'd rather trust only the title.
+
 ## Tuning the filter
 
 Edit `filters` in `sources.json`.
@@ -136,6 +163,9 @@ Edit `filters` in `sources.json`.
 - Run slow → lower `max_workers` (default 12) if a host starts rate-limiting;
   raise it if you add another hundred companies.
 
-Known tradeoff: matching is **title-only**. A role titled plain "Software
-Engineer" that is secretly new-grad-friendly won't match. That's deliberate;
-matching on descriptions roughly triples false positives.
+Known tradeoff: matching is **title-only** for company feeds. A role on a
+company's own board titled plain "Software Engineer" that is secretly
+new-grad-friendly still won't match — nothing in the title says otherwise, and
+matching on descriptions roughly triples false positives. The aggregator feeds
+cover that gap for the companies they track, since their curation supplies the
+level signal the title lacks.

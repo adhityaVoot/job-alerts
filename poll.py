@@ -279,6 +279,11 @@ def fetch_simplify(cfg, alias_map):
                 "url": j.get("url", ""),
                 "location": ", ".join(j.get("locations", []) or []),
                 "degrees": j.get("degrees", []) or [],
+                # These repos exist to track new-grad/internship roles and
+                # nothing else, so membership IS the level signal. Without
+                # this, a plainly-titled "Software Engineer" that the
+                # maintainers already vetted as new-grad gets thrown away.
+                "level_implied": cfg.get("level_implied", False),
             })
     return out
 
@@ -293,9 +298,59 @@ def compile_kw(keywords):
     return re.compile(r"(?<![a-z0-9])(?:" + "|".join(parts) + r")(?![a-z0-9])")
 
 
-def matches(title, level_re, role_re):
+# "Software Engineer I", "Developer 1", "Analyst I" — the most common new-grad
+# title that contains no new-grad word at all. Roman/arabic 1 only: II and up
+# are already a promotion.
+LEVEL_ONE_RE = re.compile(
+    r"\b(?:engineer|developer|scientist|analyst|programmer|associate)"
+    r"[,\s-]*(?:i|1)\b")
+
+# Seniority, for the level-curated feeds only — see matches(). "lead" has to
+# be anchored, because "Lead Ads" is a TikTok product, not a job level.
+SENIOR_RE = re.compile(
+    r"\b(?:senior|sr\.?|staff|principal|distinguished|manager|director|"
+    r"head of|vp|president|architect|tech lead|team lead|lead engineer)\b")
+SENIOR_LEVEL_RE = re.compile(
+    r"\b(?:engineer|developer|scientist|analyst|programmer)"
+    r"[,\s-]*(?:ii|iii|iv|v|2|3|4|5)\b")
+
+# Roles that talk about engineering without being engineering. "Campus
+# Recruiter, Machine Learning" clears both keyword gates otherwise.
+NOT_ENGINEERING_RE = re.compile(
+    r"\b(?:recruiter|recruiting|talent acquisition|sourcer|sales|"
+    r"account executive|account manager|marketing|customer success|"
+    r"business development|solutions consultant|technical writer)\b")
+
+
+def matches(title, level_re, role_re, level_implied=False):
+    """A title must name a role we want AND read as entry-level.
+
+    Entry-level is established either by the title itself (a level keyword, or
+    an "Engineer I" style suffix) or, failing that, by the posting coming from
+    a feed that lists nothing but new-grad/internship roles.
+
+    Precedence matters, so it is spelled out rather than folded together:
+
+    1. An explicit level word wins outright. Google really does post
+       "Software Engineer II, Early Career" and Amazon "Applied Scientist 2
+       Intern"; a role that calls itself an internship is one.
+    2. Otherwise seniority vetoes, so Rocket Lab's "Senior Ground Software
+       Engineer I" does not sneak in on the "Engineer I" suffix.
+    3. Then "Engineer I" counts as entry-level on its own.
+    4. Failing all that, a feed that lists nothing but new-grad/internship
+       roles vouches for the posting, minus anything titled level II+."""
     t = title.lower()
-    return bool(level_re.search(t)) and bool(role_re.search(t))
+    if not role_re.search(t) or NOT_ENGINEERING_RE.search(t):
+        return False
+    if level_re.search(t):
+        return True
+    if SENIOR_RE.search(t):
+        return False
+    if LEVEL_ONE_RE.search(t):
+        return True
+    if level_implied:
+        return not SENIOR_LEVEL_RE.search(t)
+    return False
 
 
 # --- PhD exclusion --------------------------------------------------------
@@ -441,7 +496,7 @@ def gather(cfg, verify=False):
     alias_map = build_alias_map(cfg["companies"])
 
     def keep(p):
-        if not matches(p["title"], level_re, role_re):
+        if not matches(p["title"], level_re, role_re, p.get("level_implied")):
             return False
         if exclude_phd and is_phd_only(p["title"], p.get("degrees", [])):
             return False
