@@ -374,6 +374,26 @@ def is_phd_only(title, degrees):
     return False
 
 
+# --- Grad-year exclusion ---------------------------------------------------
+
+INTERN_TITLE_RE = re.compile(r"\bintern(?:ship)?\b|\bco-?op\b")
+
+
+def is_excluded_grad_year(title, excluded_years):
+    """True if the title reads as a full-time new-grad posting tied to one of
+    the excluded graduating classes (e.g. "Class of 2026", "New Grad 2026").
+    Internships are never excluded this way -- a "Summer 2026 Intern" role is
+    about when the internship runs, not which class the hire graduates with,
+    so it stays regardless of excluded_years."""
+    if not excluded_years:
+        return False
+    t = title.lower()
+    if INTERN_TITLE_RE.search(t):
+        return False
+    return any(re.search(r"(?<![0-9])" + re.escape(y) + r"(?![0-9])", t)
+               for y in excluded_years)
+
+
 # --- US location gate -----------------------------------------------------
 
 US_CODES = ("al ak az ar ca co ct de fl ga hi id il in ia ks ky la me md ma "
@@ -492,6 +512,7 @@ def gather(cfg, verify=False):
     level_re = compile_kw(filt["level_keywords"])
     role_re = compile_kw(filt["role_keywords"])
     exclude_phd = filt.get("exclude_phd", False)
+    exclude_grad_years = filt.get("exclude_grad_years", [])
     us_only = filt.get("us_only", False)
     alias_map = build_alias_map(cfg["companies"])
 
@@ -499,6 +520,8 @@ def gather(cfg, verify=False):
         if not matches(p["title"], level_re, role_re, p.get("level_implied")):
             return False
         if exclude_phd and is_phd_only(p["title"], p.get("degrees", [])):
+            return False
+        if is_excluded_grad_year(p["title"], exclude_grad_years):
             return False
         if us_only and not is_us(p.get("location", ""), p["title"]):
             return False
@@ -622,6 +645,11 @@ def write_report(cfg, postings, report):
     if cfg["filters"].get("exclude_phd"):
         L.append("- **No PhD-only:** roles gated to PhD (by title or the "
                  "aggregator degrees field) are dropped.\n")
+    excluded_years = cfg["filters"].get("exclude_grad_years")
+    if excluded_years:
+        L.append("- **Excluded grad years:** full-time new-grad roles for "
+                 + ", ".join(f"`{y}`" for y in excluded_years)
+                 + " are dropped (internships for those years are kept).\n")
     L.append("\n")
     L.append("**Level:** " + ", ".join(f"`{k}`" for k in cfg["filters"]["level_keywords"]) + "\n\n")
     L.append("**Role:** " + ", ".join(f"`{k}`" for k in cfg["filters"]["role_keywords"]) + "\n")
