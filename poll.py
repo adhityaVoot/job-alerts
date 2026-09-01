@@ -384,6 +384,16 @@ def is_phd_only(title, degrees):
 INTERN_TITLE_RE = re.compile(r"\bintern(?:ship)?\b|\bco-?op\b")
 
 
+def is_allowed_intern_period(title, allowed_periods):
+    """Allow non-intern roles, and only explicitly allowlisted intern terms."""
+    t = title.lower()
+    if not INTERN_TITLE_RE.search(t):
+        return True
+    return any(re.search(r"(?<![a-z0-9])" + re.escape(period.lower())
+                         + r"(?![a-z0-9])", t)
+               for period in allowed_periods)
+
+
 def is_excluded_grad_year(title, excluded_years):
     """True if the title reads as a full-time new-grad posting tied to one of
     the excluded graduating classes (e.g. "Class of 2026", "New Grad 2026").
@@ -558,6 +568,7 @@ def gather(cfg, verify=False):
     role_re = compile_kw(filt["role_keywords"])
     exclude_phd = filt.get("exclude_phd", False)
     exclude_grad_years = filt.get("exclude_grad_years", [])
+    allowed_intern_periods = filt.get("allowed_intern_periods")
     us_only = filt.get("us_only", False)
     companies = selected_companies(cfg)
     alias_map = build_alias_map(companies)
@@ -566,6 +577,10 @@ def gather(cfg, verify=False):
         if not matches(p["title"], level_re, role_re, p.get("level_implied")):
             return False
         if exclude_phd and is_phd_only(p["title"], p.get("degrees", [])):
+            return False
+        if (allowed_intern_periods is not None
+                and not is_allowed_intern_period(
+                    p["title"], allowed_intern_periods)):
             return False
         if is_excluded_grad_year(p["title"], exclude_grad_years):
             return False

@@ -3,6 +3,7 @@
     "us_only": true,
     "exclude_phd": true,
     "exclude_grad_years": ["2026"],
+    "allowed_intern_periods": ["spring 2027", "winter 2026"],
     "level_keywords": [
       "intern", "internship", "co-op", "coop", "new grad", "new graduate",
       "newgrad", "early career", "early-career", "university graduate",
